@@ -26,24 +26,37 @@ class State (TypedDict):
     next: str | None
 
 def classify_message(state: State):
-    last_message = state["messages"][-1]
+    # defensive access: messages may be empty or contain dicts/objects
+    messages = state.get("messages") or []
+    if not messages:
+        # nothing to classify; default to logical
+        return {"message_type": "logical"}
+
+    last_message = messages[-1]
+
+    # support both dict-like and object-like message representations
+    content = getattr(last_message, "content", None) or last_message.get("content") if isinstance(last_message, dict) else None
+    if content is None:
+        # fallback if message shape is unexpected
+        return {"message_type": "logical"}
+
     classifier_llm = llm.with_structured_output(MessageClassifier)
 
-    result = classifier_llm.invoke([
-        {
-            "role": "system",
-            "content": """Classify the user message as either:
-            - 'emotional': if it ask for emotional support, therapy, deals with feelings or personal problem.
-            - 'logical': if it ask for facts, intformation, logical analysis or practical solution.
-               """
-        },
-        {
-            "role": "user", 
-            "content": last_message.content
-        }
-    ])
-
-    return {"message_type": result.message_type}
+    try:
+        result = classifier_llm.invoke([
+            {
+                "role": "system",
+                "content": """Classify the user message as either:
+            - 'emotional': if it asks for emotional support, therapy, deals with feelings, or personal problems
+            - 'logical': if it asks for facts, information, logical analysis, or practical solutions
+            """
+            },
+            {"role": "user", "content": content}
+        ])
+        return {"message_type": result.message_type}
+    except Exception:
+        # if the classifier fails, return a sensible default
+        return {"message_type": "logical"}
 
 
 
@@ -56,7 +69,16 @@ def router(state: State):
      return {"next": "logical"} 
 
 def therapist_agent(state: State):
-    last_message = state["messages"][-1]
+    messages_list = state.get("messages") or []
+    if not messages_list:
+        return {"messages": []}
+
+    last_message = messages_list[-1]
+
+    # support dict or object
+    content = getattr(last_message, "content", None) or (last_message.get("content") if isinstance(last_message, dict) else None)
+    if content is None:
+        return {"messages": []}
 
     messages =  [
         {
@@ -69,7 +91,7 @@ def therapist_agent(state: State):
         }, 
         {
             "role": "user",
-            "content": last_message.content
+            "content": content
         }
     ]
 
@@ -82,7 +104,15 @@ def therapist_agent(state: State):
     ]}
 
 def logical_agent(state: State):
-    last_message = state["messages"][-1]
+    messages_list = state.get("messages") or []
+    if not messages_list:
+        return {"messages": []}
+
+    last_message = messages_list[-1]
+
+    content = getattr(last_message, "content", None) or (last_message.get("content") if isinstance(last_message, dict) else None)
+    if content is None:
+        return {"messages": []}
 
     messages =  [
         {
@@ -95,7 +125,7 @@ def logical_agent(state: State):
         }, 
         {
             "role": "user",
-            "content": last_message.content
+            "content": content
         }
     ]
 
@@ -111,7 +141,6 @@ def logical_agent(state: State):
 
 graph_builder = StateGraph(State)
 
-
 graph_builder.add_node("classifier", classify_message)
 graph_builder.add_node("router", router)
 graph_builder.add_node("therapist", therapist_agent)
@@ -122,7 +151,7 @@ graph_builder.add_edge(START, "classifier")
 graph_builder.add_edge("classifier", "router")
 graph_builder.add_conditional_edges(
     "router",
-    lambda state: state.gate("next"),
+    lambda state: state.get("next"),
     {"therapist": "therapist", "logical": "logical"}
 )
 
@@ -133,7 +162,7 @@ graph_builder.add_edge("logical", END)
 graph = graph_builder.compile()
 
 def run_chatbot():
-    state = {"message": [], "message_type": None}
+    state = {"messages": [], "message_type": None}
 
     while True:
         user_input = input("Message: ")
@@ -141,17 +170,20 @@ def run_chatbot():
             print("Bye")
             break
 
-        state["message"] = state.get("messages", []) + [
+        state["messages"] = state.get("messages", []) + [
             {
-                "role": ":user", "content": user_input
+                "role": "user", "content": user_input
             }
         ]
 
         state = graph.invoke(state)
 
         if state.get("messages") and len(state["messages"]) > 0:
-            last_message =  state["messages"][-1]
-            print(f"Assistant: {last_message.content}")
+            last_message = state["messages"][-1]
+            # support object or dict message
+            assistant_content = getattr(last_message, "content", None) or (last_message.get("content") if isinstance(last_message, dict) else None)
+            if assistant_content:
+                print(f"Assistant: {assistant_content}")
 
 
 if __name__ == "__main__":
