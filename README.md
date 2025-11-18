@@ -31,11 +31,6 @@ source ./venv/bin/active
 pip install -r requirements.txt 
 ```
 
-- Install the necessary packages
-``` bash
-pip install -r requirements.txt 
-```
-
 - Run the file
 ``` bash
 python main.py
